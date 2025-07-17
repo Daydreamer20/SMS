@@ -1,0 +1,160 @@
+name: School Management System CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        cd sms/backend
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio pytest-cov httpx
+    
+    - name: Run tests
+      env:
+        TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+      run: |
+        cd sms/backend
+        pytest -xvs --cov=app tests/
+    
+    - name: Upload test coverage
+      uses: codecov/codecov-action@v2
+      with:
+        directory: ./sms/backend
+        fail_ci_if_error: true
+  
+  frontend-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v2
+      with:
+        node-version: '16'
+    
+    - name: Install dependencies
+      run: |
+        cd sms/frontend
+        npm ci
+    
+    - name: Run tests
+      run: |
+        cd sms/frontend
+        npm test -- --coverage
+    
+    - name: Upload test coverage
+      uses: codecov/codecov-action@v2
+      with:
+        directory: ./sms/frontend
+        fail_ci_if_error: true
+  
+  lint-backend:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.11'
+    
+    - name: Install linting dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 black isort mypy
+    
+    - name: Run linting
+      run: |
+        cd sms/backend
+        flake8 app tests
+        black --check app tests
+        isort --check-only app tests
+  
+  lint-frontend:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v2
+      with:
+        node-version: '16'
+    
+    - name: Install dependencies
+      run: |
+        cd sms/frontend
+        npm ci
+    
+    - name: Run linting
+      run: |
+        cd sms/frontend
+        npm run lint
+  
+  build-and-deploy:
+    needs: [backend-tests, frontend-tests, lint-backend, lint-frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Build backend Docker image
+      run: |
+        cd sms
+        docker build -t sms-backend:latest -f docker/backend/Dockerfile .
+    
+    - name: Build frontend Docker image
+      run: |
+        cd sms
+        docker build -t sms-frontend:latest -f docker/frontend/Dockerfile .
+    
+    # In a real environment, you would push to a container registry
+    # and then deploy to your hosting environment
+    - name: Login to Docker Hub
+      if: false  # Disabled for now, enable in production
+      uses: docker/login-action@v1
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+    
+    - name: Push Docker images
+      if: false  # Disabled for now, enable in production
+      run: |
+        docker tag sms-backend:latest username/sms-backend:latest
+        docker tag sms-frontend:latest username/sms-frontend:latest
+        docker push username/sms-backend:latest
+        docker push username/sms-frontend:latest 
