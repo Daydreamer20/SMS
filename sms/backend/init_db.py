@@ -8,6 +8,14 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 # Add the current directory to Python path
 sys.path.append(str(Path(__file__).parent))
@@ -171,17 +179,17 @@ async def create_tables():
     
     try:
         async with engine.begin() as conn:
-            print("🗄️ Creating database tables...")
+            logger.info("🗄️ Creating database tables...")
             
             for i, sql_command in enumerate(sql_commands, 1):
                 try:
                     await conn.execute(text(sql_command))
-                    print(f"✅ Executed command {i}/{len(sql_commands)}")
+                    logger.info(f"✅ Executed command {i}/{len(sql_commands)}")
                 except Exception as e:
-                    print(f"⚠️ Warning in command {i}: {e}")
+                    logger.warning(f"⚠️ Warning in command {i}: {e}")
                     continue
             
-            print("✅ Database initialization completed successfully!")
+            logger.info("✅ Database initialization completed successfully!")
             
             # Verify tables were created
             result = await conn.execute(text("""
@@ -191,23 +199,23 @@ async def create_tables():
             """))
             
             tables = [row[0] for row in result.fetchall()]
-            print(f"📋 Created tables: {', '.join(tables)}")
+            logger.info(f"📋 Created tables: {', '.join(tables)}")
             
     except Exception as e:
-        print(f"❌ Database initialization failed: {e}")
+        logger.error(f"❌ Database initialization failed: {e}")
         raise
 
 
 async def main():
     """Main function to initialize database."""
-    print("🚀 Starting SMS Database Initialization...")
-    print(f"📍 Environment: {settings.ENVIRONMENT}")
-    print(f"🔗 Database URL: {str(settings.SQLALCHEMY_DATABASE_URI)[:50]}...")
+    logger.info("🚀 Starting SMS Database Initialization...")
+    logger.info(f"📍 Environment: {settings.ENVIRONMENT}")
+    logger.info(f"🔗 Database URL: {str(settings.SQLALCHEMY_DATABASE_URI)[:50]}...")
     
     await create_tables()
     await engine.dispose()
     
-    print("🎉 Database setup completed!")
+    logger.info("🎉 Database setup completed!")
 
 
 if __name__ == "__main__":
