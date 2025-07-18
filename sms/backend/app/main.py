@@ -193,14 +193,15 @@ async def startup_event():
     """Initialize database on startup."""
     try:
         # Run our custom database initialization
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(__file__)))
         from init_db import create_tables
         await create_tables()
         logger.info("✅ Database tables created successfully")
     except Exception as e:
         logger.error(f"❌ Database initialization failed: {e}")
         # Continue anyway - the app might still work
-    
-    await initialize_database()
 
 
 @app.on_event("shutdown")
