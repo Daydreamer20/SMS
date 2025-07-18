@@ -4,7 +4,7 @@ Configuration settings for the School Management System application.
 
 import secrets
 from typing import Any, Dict, List, Optional
-from pydantic import AnyHttpUrl, PostgresDsn, field_validator, validator
+from pydantic import AnyHttpUrl, PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -43,9 +43,9 @@ class Settings(BaseSettings):
 
     # Security settings
     @field_validator("DOCS_URL", "REDOC_URL", mode="before")
-    def disable_docs_in_production(cls, v: str, values: dict) -> Optional[str]:
+    def disable_docs_in_production(cls, v: str, info) -> Optional[str]:
         """Disable API docs in production."""
-        if values.get("ENVIRONMENT") == "production":
+        if info.data.get("ENVIRONMENT") == "production":
             return None
         return v
 
@@ -79,9 +79,9 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     @field_validator("JWT_SECRET_KEY")
-    def validate_jwt_secret(cls, v: str, values: dict) -> str:
+    def validate_jwt_secret(cls, v: str, info) -> str:
         """Validate JWT secret key in production."""
-        if values.get("ENVIRONMENT") == "production" and v == "your_super_secret_key_here":
+        if info.data.get("ENVIRONMENT") == "production" and v == "your_super_secret_key_here":
             raise ValueError("JWT_SECRET_KEY must be changed in production")
         if len(v) < 32:
             raise ValueError("JWT_SECRET_KEY must be at least 32 characters long")

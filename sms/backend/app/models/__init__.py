@@ -8,9 +8,8 @@ from app.models.user import User, Role
 from app.models.student import Student, ParentGuardian, Gender, BloodGroup
 from app.models.staff import Staff, StaffType
 from app.models.academic import (
-    AcademicYear, Class, Subject, 
-    Examination, ExaminationSubject, Grade, GradingScale,
-    ExaminationType, GradeStatus
+    Class, Subject, Grade, Examination, 
+    ExaminationType, GradeType, StudentPerformanceReport
 )
 from app.models.settings import SchoolSettings, SystemSettings, GradingSystem
 from app.models.library import (

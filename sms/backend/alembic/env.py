@@ -20,8 +20,9 @@ from app.models import user, student, staff, academic
 # access to the values within the .ini file in use.
 config = context.config
 
-# Override the SQLAlchemy URL from settings
-config.set_main_option("sqlalchemy.url", str(settings.SQLALCHEMY_DATABASE_URI))
+# Override the SQLAlchemy URL from settings - use synchronous driver for Alembic
+database_url = str(settings.SQLALCHEMY_DATABASE_URI).replace("+asyncpg", "+psycopg2")
+config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
