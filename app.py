@@ -3,15 +3,25 @@ Super simple FastAPI application for Railway deployment with database connection
 """
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
 import psycopg2
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 app = FastAPI()
 
 # Get database URL from environment variable
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+)
 
 @app.get("/")
 def read_root() -> Dict[str, Any]:
@@ -60,6 +70,18 @@ def test_db_connection() -> Dict[str, Any]:
             "status": "error",
             "message": f"Failed to connect to the database: {str(e)}"
         }
+
+@app.get("/env")
+def show_environment() -> Dict[str, Any]:
+    """Show environment variables (excluding sensitive ones)"""
+    env_vars = {}
+    for key, value in os.environ.items():
+        # Skip sensitive variables
+        if any(sensitive in key.lower() for sensitive in ["password", "secret", "key", "token"]):
+            env_vars[key] = "***REDACTED***"
+        else:
+            env_vars[key] = value
+    return {"environment_variables": env_vars}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
