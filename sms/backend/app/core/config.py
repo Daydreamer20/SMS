@@ -50,6 +50,7 @@ class Settings(BaseSettings):
         return v
 
     # Database settings
+    DATABASE_URL: Optional[str] = None
     DB_DRIVER: str = "postgresql"
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
@@ -61,16 +62,19 @@ class Settings(BaseSettings):
     DB_ECHO: bool = False
 
     @property
-    def SQLALCHEMY_DATABASE_URI(self) -> Optional[PostgresDsn]:
+    def SQLALCHEMY_DATABASE_URI(self) -> str:
         """Assemble database connection string."""
-        return PostgresDsn.build(
-            scheme=f"{self.DB_DRIVER}+asyncpg",
-            username=self.DB_USER,
-            password=self.DB_PASSWORD,
-            host=self.DB_HOST,
-            port=self.DB_PORT,
-            path=f"/{self.DB_NAME}",
-        )
+        if self.DATABASE_URL:
+            # Use DATABASE_URL if provided (for Railway, Heroku, etc.)
+            if "postgresql://" in self.DATABASE_URL:
+                return self.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
+            return self.DATABASE_URL
+        elif self.ENVIRONMENT == "development":
+            # Use SQLite for local development
+            return "sqlite+aiosqlite:///./sms_dev.db"
+        else:
+            # Build PostgreSQL URL from individual components
+            return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
     # JWT Authentication
     JWT_SECRET_KEY: str = "your_super_secret_key_here"
