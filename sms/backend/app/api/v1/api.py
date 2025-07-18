@@ -4,7 +4,7 @@ API v1 router configuration.
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, users, students, staff, examinations, settings, library
+from app.api.v1.endpoints import auth, users, students, staff, examinations, settings, library, monitoring
 from app.api.v1.endpoints import calendar, email, parent_communication, fees, timetable, integrations
 from app.api.v1.endpoints.timetable import router as timetable_router
 
@@ -26,4 +26,7 @@ api_router.include_router(email.router, prefix="/email", tags=["email"])
 api_router.include_router(parent_communication.router, prefix="/parent-communication", tags=["parent_communication"])
 api_router.include_router(fees.router, prefix="/fees", tags=["fees"])
 api_router.include_router(timetable_router, prefix="/timetable", tags=["timetable"])
-api_router.include_router(integrations.router, prefix="/integrations", tags=["integrations"]) 
+api_router.include_router(integrations.router, prefix="/integrations", tags=["integrations"])
+
+# Monitoring and health check routers
+api_router.include_router(monitoring.router, prefix="/monitoring", tags=["monitoring"]) 

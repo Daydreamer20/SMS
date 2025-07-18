@@ -1,112 +1,175 @@
 """
-Security utilities for authentication and authorization.
+Security middleware and utilities for production.
 """
 
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
-
-from jose import jwt, JWTError
-from passlib.context import CryptContext
-from pydantic import ValidationError
+import time
+from typing import Dict, Optional
+from fastapi import HTTPException, Request, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+import redis.asyncio as redis
 
 from app.core.config import settings
-from app.schemas.user import TokenPayload
 
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["argon2", "bcrypt"], deprecated="auto")
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses."""
 
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Verify a password against a hash.
-
-    Args:
-        plain_password: Plain text password
-        hashed_password: Hashed password
-
-    Returns:
-        bool: True if password matches hash
-    """
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password: str) -> str:
-    """
-    Hash a password.
-
-    Args:
-        password: Plain text password
-
-    Returns:
-        str: Hashed password
-    """
-    return pwd_context.hash(password)
-
-
-def create_access_token(
-    subject: Union[str, int], expires_delta: Optional[timedelta] = None, roles: List[str] = []
-) -> str:
-    """
-    Create a JWT access token.
-
-    Args:
-        subject: Subject (usually user ID)
-        expires_delta: Optional expiration time
-        roles: List of role names
-
-    Returns:
-        str: JWT token
-    """
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(
-            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Security headers
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        
+        # HSTS header for HTTPS
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        
+        # CSP header
+        csp = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; "
+            "font-src 'self' https:; "
+            "connect-src 'self' https:; "
+            "frame-ancestors 'none';"
         )
-
-    to_encode: Dict[str, Any] = {"exp": expire, "sub": str(subject), "roles": roles}
-    encoded_jwt = jwt.encode(
-        to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
-    )
-    return encoded_jwt
+        response.headers["Content-Security-Policy"] = csp
+        
+        return response
 
 
-def create_refresh_token(subject: Union[str, int]) -> str:
-    """
-    Create a JWT refresh token.
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Rate limiting middleware using Redis."""
 
-    Args:
-        subject: Subject (usually user ID)
+    def __init__(self, app, redis_client: Optional[redis.Redis] = None):
+        super().__init__(app)
+        self.redis_client = redis_client
+        self.requests_per_minute = settings.RATE_LIMIT_REQUESTS_PER_MINUTE
+        self.enabled = settings.RATE_LIMIT_ENABLED
 
-    Returns:
-        str: JWT refresh token
-    """
-    expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode: Dict[str, Any] = {"exp": expire, "sub": str(subject), "refresh": True}
-    encoded_jwt = jwt.encode(
-        to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
-    )
-    return encoded_jwt
+    async def dispatch(self, request: Request, call_next):
+        if not self.enabled or not self.redis_client:
+            return await call_next(request)
+
+        # Skip rate limiting for health checks
+        if request.url.path in ["/health", "/", f"{settings.API_PREFIX}/health"]:
+            return await call_next(request)
+
+        client_ip = self._get_client_ip(request)
+        key = f"rate_limit:{client_ip}"
+        
+        try:
+            current_requests = await self.redis_client.get(key)
+            
+            if current_requests is None:
+                # First request from this IP
+                await self.redis_client.setex(key, 60, 1)
+            else:
+                current_count = int(current_requests)
+                if current_count >= self.requests_per_minute:
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Rate limit exceeded. Please try again later."
+                    )
+                await self.redis_client.incr(key)
+                
+        except redis.RedisError:
+            # If Redis is down, allow the request but log the error
+            pass
+
+        return await call_next(request)
+
+    def _get_client_ip(self, request: Request) -> str:
+        """Get client IP address from request."""
+        # Check for forwarded headers (when behind a proxy)
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+        
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip:
+            return real_ip
+            
+        return request.client.host if request.client else "unknown"
 
 
-def decode_token(token: str) -> TokenPayload:
-    """
-    Decode a JWT token.
+class IPWhitelistMiddleware(BaseHTTPMiddleware):
+    """IP whitelist middleware for admin endpoints."""
 
-    Args:
-        token: JWT token
+    def __init__(self, app, whitelist: Optional[list] = None):
+        super().__init__(app)
+        self.whitelist = whitelist or []
 
-    Returns:
-        TokenPayload: Decoded token payload
+    async def dispatch(self, request: Request, call_next):
+        # Only apply to admin endpoints
+        if not request.url.path.startswith(f"{settings.API_PREFIX}/admin"):
+            return await call_next(request)
 
-    Raises:
-        ValueError: If token is invalid
-    """
-    try:
-        payload = jwt.decode(
-            token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
-        )
-        return TokenPayload(**payload)
-    except (JWTError, ValidationError) as e:
-        raise ValueError(f"Invalid token: {str(e)}") 
+        if not self.whitelist:
+            return await call_next(request)
+
+        client_ip = self._get_client_ip(request)
+        
+        if client_ip not in self.whitelist:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied from this IP address"
+            )
+
+        return await call_next(request)
+
+    def _get_client_ip(self, request: Request) -> str:
+        """Get client IP address from request."""
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+        
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip:
+            return real_ip
+            
+        return request.client.host if request.client else "unknown"
+
+
+# Redis connection for rate limiting
+redis_client: Optional[redis.Redis] = None
+
+
+async def get_redis_client() -> Optional[redis.Redis]:
+    """Get Redis client for rate limiting."""
+    global redis_client
+    
+    if not settings.RATE_LIMIT_ENABLED:
+        return None
+        
+    if redis_client is None:
+        try:
+            redis_client = redis.from_url(
+                settings.REDIS_URL,
+                encoding="utf-8",
+                decode_responses=True,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+            )
+            # Test connection
+            await redis_client.ping()
+        except Exception as e:
+            print(f"Failed to connect to Redis: {e}")
+            redis_client = None
+    
+    return redis_client
+
+
+async def close_redis_client():
+    """Close Redis connection."""
+    global redis_client
+    if redis_client:
+        await redis_client.close()
+        redis_client = None
